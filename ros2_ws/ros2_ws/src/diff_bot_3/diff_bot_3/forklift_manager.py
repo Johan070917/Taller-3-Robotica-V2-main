@@ -1,19 +1,23 @@
 """
 forklift_manager.py  -  Logica autonoma del montacargas.
 
-Secuencia simplificada (sin sensores adicionales, solo odometria + camara):
+Secuencia (sin sensores adicionales, solo odometria + camara):
 
   D-PAD ARRIBA (cruceta hacia arriba) en el joystick:
-      1. FORKS_OPEN (extiende las palas)
-      2. Avanza 11 cm en linea recta usando /odom
+      1. FORKS_OPEN  (servo gira, palas quedan PARALELAS al suelo)
+      2. Avanza 21 cm en linea recta usando /odom
       3. Sube el montacargas (STEP_UP STEPS_FULL_LIFT)
       4. Queda en estado HOLDING (el operador conduce con el joystick)
 
   D-PAD ABAJO (cruceta hacia abajo) en el joystick:
       1. Baja totalmente el montacargas (STEP_DOWN del total subido)
-      2. FORKS_CLOSE (recoge palas)
-      3. Retrocede 10 cm en linea recta usando /odom
+      2. Retrocede 21 cm en linea recta usando /odom
+      3. FORKS_CLOSE (servo retrae palas, quedan PERPENDICULARES al suelo)
       4. Vuelve a IDLE
+
+Las distancias estan calibradas para palas de 20 cm de largo:
+deja al robot a ~21 cm del cubo cuando arranca, asi avanza ese tramo
+y queda con las palas justo debajo del cubo de 15x15 cm.
 
 El reconocimiento de cubos rojo / verde / azul (vision_node.py) sigue
 publicando en /cube_detected como antes; aqui solo se usa para imprimir
@@ -33,8 +37,8 @@ from sensor_msgs.msg import Joy
 
 
 # ============== PARAMETROS (ajustar con pruebas reales) ================
-DIST_FORWARD_M    = 0.11   # 11 cm hacia adelante al activar D-PAD UP
-DIST_BACKWARD_M   = 0.10   # 10 cm hacia atras al activar D-PAD DOWN
+DIST_FORWARD_M    = 0.21   # 21 cm hacia adelante al activar D-PAD UP
+DIST_BACKWARD_M   = 0.21   # 21 cm hacia atras al activar D-PAD DOWN
 V_DRIVE           = 0.08   # m/s durante el avance / retroceso autonomo
 W_HEADING_GAIN    = 1.5    # mantiene el rumbo recto (P sobre el yaw)
 
@@ -249,8 +253,18 @@ class ForkliftManager(Node):
                 return
             if self.esp32_done:
                 self.steps_up_total = 0
-                self._go('RETRACT_FORKS')
+                self.esp32_done = False
+                self._begin_drive(-1, DIST_BACKWARD_M, next_state='DRIVE_BACK')
             elif age > T_TIMEOUT_OP * 2 or self.esp32_err:
+                self._begin_drive(-1, DIST_BACKWARD_M, next_state='DRIVE_BACK')
+
+        elif self.state == 'DRIVE_BACK':
+            if age > T_TIMEOUT_DRIVE:
+                self.pub_vel.publish(Twist())
+                self.get_logger().warn("Timeout retrocediendo.")
+                self._go('RETRACT_FORKS')
+                return
+            if self._drive_step():
                 self._go('RETRACT_FORKS')
 
         elif self.state == 'RETRACT_FORKS':
@@ -258,16 +272,6 @@ class ForkliftManager(Node):
                 self._send('FORKS_CLOSE')
                 return
             if self.esp32_done or age > T_TIMEOUT_OP or self.esp32_err:
-                self.esp32_done = False
-                self._begin_drive(-1, DIST_BACKWARD_M, next_state='DRIVE_BACK')
-
-        elif self.state == 'DRIVE_BACK':
-            if age > T_TIMEOUT_DRIVE:
-                self.pub_vel.publish(Twist())
-                self.get_logger().warn("Timeout retrocediendo.")
-                self._go('IDLE')
-                return
-            if self._drive_step():
                 self.get_logger().info("Secuencia de deposito completada.")
                 self._go('IDLE')
 
