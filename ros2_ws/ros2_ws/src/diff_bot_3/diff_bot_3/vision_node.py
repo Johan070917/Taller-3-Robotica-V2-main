@@ -106,7 +106,10 @@ class VisionNode(Node):
         if self.picam is not None:
             return cv2.cvtColor(self.picam.capture_array(), cv2.COLOR_RGB2BGR)
         ok, frame = self.cap.read()
-        return frame if ok else None
+        if not ok:
+            return None
+        # VideoCapture en la Camera Module 3 via V4L2 entrega RGB en lugar de BGR
+        return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
     # --------------------------------------------------------- find one color
     @staticmethod
