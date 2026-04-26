@@ -106,11 +106,7 @@ class VisionNode(Node):
         if self.picam is not None:
             return cv2.cvtColor(self.picam.capture_array(), cv2.COLOR_RGB2BGR)
         ok, frame = self.cap.read()
-        if not ok:
-            return None
-        # Camera Module 3 via V4L2 entrega RGB, convertir a BGR para que
-        # cv2.COLOR_BGR2HSV y cv2.imshow funcionen con los colores correctos
-        return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        return frame if ok else None
 
     # --------------------------------------------------------- find one color
     @staticmethod
@@ -135,7 +131,8 @@ class VisionNode(Node):
         frame = self._grab()
         if frame is None:
             return
-        hsv  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        # Frame de VideoCapture llega en RGB (no BGR) en esta camara
+        hsv  = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
         draw = frame.copy()
 
         best = None
@@ -182,8 +179,9 @@ class VisionNode(Node):
                 pass
 
         # Mostrar la ventana OpenCV (visible vía SSH X11)
+        # Convierte BGR2RGB para que los colores se vean correctos via X11/VcXsrv
         if self.show_window:
-            cv2.imshow(WINDOW_NAME, draw)
+            cv2.imshow(WINDOW_NAME, cv2.cvtColor(draw, cv2.COLOR_BGR2RGB))
             cv2.waitKey(1)
 
     def destroy_node(self):
