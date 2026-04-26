@@ -1,18 +1,17 @@
 """
-robot_launch.py  -  Lanza todo el sistema MAESTRO en la Raspberry Pi 5:
+robot_launch.py  -  Lanza todo el sistema en la Raspberry Pi 5.
 
-  * robot_core         (driver motores + odometria + PID)
-  * cmd_vel_mux        (prioriza teleop > auto > player)
-  * robot_player       (reproductor de trayectorias en lazo cerrado)
-  * robot_interface    (GUI de grabacion/reproduccion/visualizacion)
-  * vision_node        (deteccion de cubos de color)
-  * forklift_manager   (FSM autonomo del montacargas)
-  * esp32_bridge       (serial USB a la ESP32)
-  * joy_node           (joystick bluetooth)
-  * teleop_twist_joy   (traduce Joy a Twist, publica en /cmd_vel_teleop)
+  * robot_core              (PID + odometria; habla con ESP32_MOTORS)
+  * cmd_vel_mux             (prioriza teleop > auto > player)
+  * robot_player            (reproductor de trayectorias en lazo cerrado)
+  * vision_node             (deteccion de cubos R/G/B + MJPEG :8080)
+  * forklift_manager        (FSM autonomo del montacargas)
+  * esp32_bridge_motors     (USB <-> ESP32_MOTORS)  /motors_cmd, /motors_status
+  * esp32_bridge_lift       (USB <-> ESP32_LIFT)    /lift_cmd,   /lift_status
+  * joy_node                (joystick bluetooth)
+  * teleop_twist_joy        (Joy -> /cmd_vel_teleop)
 
-La interfaz grafica y los teleop opcionales se lanzan aparte porque
-requieren terminal/entorno X.
+La interfaz grafica (robot_interface) se lanza aparte porque requiere X.
 """
 
 from launch import LaunchDescription
@@ -23,12 +22,17 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
 
-    serial_port = DeclareLaunchArgument(
-        'esp32_port', default_value='/dev/ttyUSB0',
-        description='Puerto serie de la ESP32')
+    motors_port = DeclareLaunchArgument(
+        'motors_port', default_value='/dev/ttyUSB0',
+        description='Puerto serie de la ESP32 de motores')
+
+    lift_port = DeclareLaunchArgument(
+        'lift_port', default_value='/dev/ttyUSB1',
+        description='Puerto serie de la ESP32 del montacargas')
 
     return LaunchDescription([
-        serial_port,
+        motors_port,
+        lift_port,
 
         Node(package='diff_bot_3', executable='robot_core',
              name='robot_core'),
@@ -45,12 +49,27 @@ def generate_launch_description():
         Node(package='diff_bot_3', executable='forklift_manager',
              name='forklift_manager'),
 
+        # ---- ESP32 motores ----
         Node(package='diff_bot_3', executable='esp32_bridge',
-             name='esp32_bridge',
-             parameters=[{'port': LaunchConfiguration('esp32_port'),
-                          'baud': 115200}]),
+             name='esp32_bridge_motors',
+             parameters=[{
+                 'port':         LaunchConfiguration('motors_port'),
+                 'baud':         115200,
+                 'cmd_topic':    '/motors_cmd',
+                 'status_topic': '/motors_status',
+             }]),
 
-        # ---- Joystick bluetooth -> /cmd_vel_teleop -----------------------
+        # ---- ESP32 montacargas ----
+        Node(package='diff_bot_3', executable='esp32_bridge',
+             name='esp32_bridge_lift',
+             parameters=[{
+                 'port':         LaunchConfiguration('lift_port'),
+                 'baud':         115200,
+                 'cmd_topic':    '/lift_cmd',
+                 'status_topic': '/lift_status',
+             }]),
+
+        # ---- Joystick bluetooth -> /cmd_vel_teleop ----
         Node(package='joy', executable='joy_node', name='joy_node'),
 
         Node(package='teleop_twist_joy',
@@ -60,7 +79,7 @@ def generate_launch_description():
                  'require_enable_button': False,
                  'axis_linear.x':   1,
                  'axis_angular.yaw': 0,
-                 'scale_linear.x':   0.25,      # bateria 2S -> menos vel. util
+                 'scale_linear.x':   0.25,
                  'scale_angular.yaw': 1.20,
              }],
              remappings=[('/cmd_vel', '/cmd_vel_teleop')]),
