@@ -106,10 +106,7 @@ class VisionNode(Node):
         if self.picam is not None:
             return cv2.cvtColor(self.picam.capture_array(), cv2.COLOR_RGB2BGR)
         ok, frame = self.cap.read()
-        if not ok:
-            return None
-        # VideoCapture en la Camera Module 3 via V4L2 entrega RGB en lugar de BGR
-        return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        return frame if ok else None
 
     # --------------------------------------------------------- find one color
     @staticmethod
@@ -181,8 +178,10 @@ class VisionNode(Node):
                 pass
 
         # Mostrar la ventana OpenCV (visible vía SSH X11)
+        # La Camera Module 3 via V4L2 entrega canales invertidos: convertir para display
         if self.show_window:
-            cv2.imshow(WINDOW_NAME, draw)
+            display = cv2.cvtColor(draw, cv2.COLOR_BGR2RGB)
+            cv2.imshow(WINDOW_NAME, display)
             cv2.waitKey(1)
 
     def destroy_node(self):
