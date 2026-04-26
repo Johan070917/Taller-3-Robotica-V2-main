@@ -2,20 +2,23 @@
 vision_node.py  -  Deteccion de cubos de color con la Camera Module 3.
 
 Salida ROS:
-  * /cube_detected   (std_msgs/String)
-  * /vision/image    (sensor_msgs/Image)  <- imagen anotada para visualizar
+  * /cube_detected   (std_msgs/String)   "COLOR,cx,cy,wpx,dist_m,ang_rad"
+  * /vision/image    (sensor_msgs/Image) imagen anotada (para rqt_image_view)
 
-El stream de /vision/image se puede ver en la PC de dos formas:
-  1. Con ROS2 en la misma red: rqt_image_view
-  2. Sin ROS2: el nodo abre un servidor MJPEG en http://<ip_raspi>:8080
-     -> abre esa URL en cualquier navegador del PC.
+Visualizacion local:
+  El nodo abre una ventana OpenCV ("cv2.imshow") con los rectangulos
+  dibujados sobre los cubos detectados.  Para verla desde el PC, conecta
+  por SSH con X11 forwarding:
+
+      ssh -X johan@<IP_RPI>
+      ros2 run diff_bot_3 vision_node
+
+  La ventana se abrira en tu PC siempre que tengas un servidor X
+  (VcXsrv en Windows, X11 nativo en Linux).
 """
 
-import io
 import math
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import cv2
 import numpy as np
@@ -39,7 +42,7 @@ except ImportError:
 
 # --------- Parametros geometricos / camara ----------------------------------
 CUBO_LADO_M   = 0.15
-FOCAL_PIXELES = 720.0       # <<< CALIBRAR (ver instrucciones en README)
+FOCAL_PIXELES = 720.0       # <<< CALIBRAR
 FRAME_W       = 640
 FRAME_H       = 480
 HFOV_RAD      = math.radians(66.0)
@@ -53,54 +56,26 @@ HSV_RANGES = {
 }
 MIN_AREA_PX = 1500
 
-# Colores BGR para los rectangulos en pantalla
+# Colores BGR para los rectangulos
 BOX_COLOR = {'RED': (0, 0, 255), 'GREEN': (0, 255, 0), 'BLUE': (255, 0, 0)}
 
-# Puerto del servidor MJPEG
-MJPEG_PORT = 8080
-
-
-# --------- Servidor MJPEG (accesible desde cualquier navegador) -------------
-class MjpegHandler(BaseHTTPRequestHandler):
-    node_ref = None
-
-    def log_message(self, *args):
-        pass  # silencia los logs del servidor HTTP
-
-    def do_GET(self):
-        if self.path != '/':
-            self.send_error(404)
-            return
-        self.send_response(200)
-        self.send_header('Content-Type',
-                         'multipart/x-mixed-replace; boundary=frame')
-        self.end_headers()
-        try:
-            while True:
-                frame = self.__class__.node_ref.latest_jpeg
-                if frame is not None:
-                    self.wfile.write(b'--frame\r\n')
-                    self.wfile.write(b'Content-Type: image/jpeg\r\n\r\n')
-                    self.wfile.write(frame)
-                    self.wfile.write(b'\r\n')
-                time.sleep(1.0 / 15.0)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+WINDOW_NAME = 'Cubos R/G/B (vision_node)'
 
 
 class VisionNode(Node):
     def __init__(self):
         super().__init__('vision_node')
 
+        # Parametro para desactivar la ventana si quieres correr "headless"
+        self.declare_parameter('show_window', True)
+        self.show_window = self.get_parameter(
+            'show_window').get_parameter_value().bool_value
+
         self.pub_det = self.create_publisher(String, '/cube_detected', 10)
         self.pub_img = self.create_publisher(Image,  '/vision/image',  10)
         self.bridge  = CvBridge() if HAS_BRIDGE else None
 
-        # Buffer JPEG para el servidor MJPEG
-        self.latest_jpeg = None
-        self._jpeg_lock = threading.Lock()
-
-        # Camara
+        # --- Camara ---
         self.picam = None
         self.cap   = None
         if HAS_PICAMERA:
@@ -117,22 +92,19 @@ class VisionNode(Node):
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
             self.get_logger().info("Camara: cv2.VideoCapture(0)")
 
-        # Servidor MJPEG en hilo aparte
-        MjpegHandler.node_ref = self
-        self._server = HTTPServer(('0.0.0.0', MJPEG_PORT), MjpegHandler)
-        self._srv_thread = threading.Thread(
-            target=self._server.serve_forever, daemon=True)
-        self._srv_thread.start()
-        self.get_logger().info(
-            f"Stream de camara disponible en  http://<IP_RASPI>:{MJPEG_PORT}")
+        if self.show_window:
+            self.get_logger().info(
+                "Mostrando ventana OpenCV.  Conecta por 'ssh -X' para verla en tu PC.")
+            self.get_logger().info(
+                "Pulsa 'q' en la ventana para cerrarla (el nodo sigue corriendo).")
+            cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
 
         self.create_timer(1.0 / 15.0, self._loop)
 
     # ------------------------------------------------------------------ grab
     def _grab(self):
         if self.picam is not None:
-            return cv2.cvtColor(self.picam.capture_array(),
-                                cv2.COLOR_RGB2BGR)
+            return cv2.cvtColor(self.picam.capture_array(), cv2.COLOR_RGB2BGR)
         ok, frame = self.cap.read()
         return frame if ok else None
 
@@ -167,37 +139,36 @@ class VisionNode(Node):
             r = self._find_cube(hsv, ranges)
             if r is None:
                 continue
-            area = r[2] * r[3]
+            x, y, w, h = r
+            # Dibuja TODOS los detectados, no solo el mas grande
+            bgr = BOX_COLOR.get(color, (255, 255, 255))
+            cv2.rectangle(draw, (x, y), (x + w, y + h), bgr, 2)
+            area = w * h
+            cx_box = x + w / 2.0
+            w_px = max(w, h)
+            dist = (FOCAL_PIXELES * CUBO_LADO_M) / max(1.0, w_px)
+            cv2.putText(draw, f"{color} {dist:.2f}m", (x, y - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, bgr, 2)
             if best is None or area > best[1]:
-                best = (color, area, r)
+                best = (color, area, r, dist, cx_box)
 
-        # Publicar /cube_detected
+        # Publicar /cube_detected (solo el mas grande)
         msg = String()
         if best is None:
             msg.data = "NONE,0,0,0,0.0,0.0"
         else:
-            color, _, (x, y, w, h) = best
-            cx   = x + w / 2.0
+            color, _, (x, y, w, h), dist, cx = best
             w_px = max(w, h)
-            dist = (FOCAL_PIXELES * CUBO_LADO_M) / max(1.0, w_px)
             ang  = -((cx - FRAME_W / 2.0) / FRAME_W) * HFOV_RAD
             msg.data = (f"{color},{int(cx)},{int(y + h / 2)},"
                         f"{int(w_px)},{dist:.3f},{ang:.4f}")
-
-            # Dibujar rectangulo + etiqueta en la imagen
-            bgr = BOX_COLOR.get(color, (255, 255, 255))
-            cv2.rectangle(draw, (x, y), (x + w, y + h), bgr, 2)
-            label = f"{color}  {dist:.2f}m"
-            cv2.putText(draw, label, (x, y - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, bgr, 2)
-
         self.pub_det.publish(msg)
 
         # Linea central de referencia
         cx_frame = FRAME_W // 2
         cv2.line(draw, (cx_frame, 0), (cx_frame, FRAME_H), (200, 200, 200), 1)
 
-        # Publicar imagen en ROS2
+        # Publicar imagen ROS (para rqt_image_view si se usa en otro PC)
         if self.bridge is not None:
             try:
                 img_msg = self.bridge.cv2_to_imgmsg(draw, encoding='bgr8')
@@ -206,14 +177,15 @@ class VisionNode(Node):
             except Exception:
                 pass
 
-        # Actualizar buffer JPEG para el servidor MJPEG
-        ok, buf = cv2.imencode('.jpg', draw, [cv2.IMWRITE_JPEG_QUALITY, 75])
-        if ok:
-            self.latest_jpeg = buf.tobytes()
+        # Mostrar la ventana OpenCV (visible vía SSH X11)
+        if self.show_window:
+            cv2.imshow(WINDOW_NAME, draw)
+            cv2.waitKey(1)
 
     def destroy_node(self):
         try:
-            self._server.shutdown()
+            if self.show_window:
+                cv2.destroyAllWindows()
             if self.picam is not None:
                 self.picam.stop()
             if self.cap is not None:
