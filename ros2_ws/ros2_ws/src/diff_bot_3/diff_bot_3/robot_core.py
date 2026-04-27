@@ -173,6 +173,18 @@ class RobotCore(Node):
             self.pid_l.reset()
             self.pid_r.reset()
 
+        # Si la referencia es esencialmente cero (joystick en reposo),
+        # frena duro y resetea integral. Sin esto, el drift del stick
+        # acumula integral hasta superar la zona muerta y dispara el motor.
+        if abs(self.v_ref) < 0.02 and abs(self.w_ref) < 0.05:
+            self.pid_l.reset()
+            self.pid_r.reset()
+            self.pub_motors_cmd.publish(String(data="PWM 0 0"))
+            wm = Float32MultiArray()
+            wm.data = [self.v_real_l, self.v_real_r, 0.0, 0.0]
+            self.pub_wheels.publish(wm)
+            return
+
         # Cinematica inversa
         v_ref_l = self.v_ref + (self.w_ref * L_BASE / 2.0)
         v_ref_r = self.v_ref - (self.w_ref * L_BASE / 2.0)
