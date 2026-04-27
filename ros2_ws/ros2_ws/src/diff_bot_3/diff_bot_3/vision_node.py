@@ -56,8 +56,9 @@ HSV_RANGES = {
 }
 MIN_AREA_PX = 1500
 
-# Colores BGR para los rectangulos
-BOX_COLOR = {'RED': (0, 0, 255), 'GREEN': (0, 255, 0), 'BLUE': (255, 0, 0)}
+# Colores definidos pre-conversion: la imagen se invierte BGR<->RGB en imshow,
+# asi que aqui ponemos los rectangulos al reves (R en posicion B y viceversa).
+BOX_COLOR = {'RED': (255, 0, 0), 'GREEN': (0, 255, 0), 'BLUE': (0, 0, 255)}
 
 WINDOW_NAME = 'Cubos R/G/B (vision_node)'
 
