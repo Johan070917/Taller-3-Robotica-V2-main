@@ -245,6 +245,20 @@ void handleLine(String line) {
 //  Setup
 // ============================================================
 void setup() {
+  // ---- Reservar timers para ESP32Servo ANTES del attach ----
+  // Sin esto, attach() falla silenciosamente y la senal PWM no se genera
+  // (porque ledcAttach del TB6612FNG ya consume timer 0).
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+
+  // ---- Servo (inicializar primero, antes de ledc del motor) ----
+  servoPalas.setPeriodHertz(50);
+  servoPalas.attach(PIN_SERVO, 500, 2400);
+  servoPalas.write(SERVO_VERTICAL);   // arranca recogido
+
+  // ---- TB6612FNG ----
   pinMode(TB_AIN1, OUTPUT);
   pinMode(TB_AIN2, OUTPUT);
   pinMode(TB_STBY, OUTPUT);
@@ -253,13 +267,10 @@ void setup() {
   ledcAttach(TB_PWMA, PWM_FREQ, PWM_RESOLUTION);
   ledcWrite(TB_PWMA, 0);
 
+  // ---- Encoder ----
   pinMode(ENC_LIFT_A, INPUT_PULLUP);
   pinMode(ENC_LIFT_B, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(ENC_LIFT_A), ISR_EncoderLift, RISING);
-
-  servoPalas.setPeriodHertz(50);
-  servoPalas.attach(PIN_SERVO, 500, 2400);
-  servoPalas.write(SERVO_VERTICAL);   // arranca recogido
 
   Serial.begin(115200);
   delay(200);
