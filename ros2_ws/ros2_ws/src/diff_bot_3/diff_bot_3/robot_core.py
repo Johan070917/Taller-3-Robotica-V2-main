@@ -108,7 +108,9 @@ class RobotCore(Node):
 
     # ------------------------- Callbacks ---------------------------------
     def _on_cmd_vel(self, msg: Twist):
-        self.v_ref = float(msg.linear.x)
+        # Motores cableados al reves respecto a la convencion: invertir v_ref
+        # para que stick adelante = robot adelante. Angular se deja igual.
+        self.v_ref = -float(msg.linear.x)
         self.w_ref = float(msg.angular.z)
         self._last_cmd_time = self.get_clock().now()
 
