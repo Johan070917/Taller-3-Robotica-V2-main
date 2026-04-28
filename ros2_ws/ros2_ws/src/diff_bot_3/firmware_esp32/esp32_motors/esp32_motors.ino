@@ -183,6 +183,9 @@ void handleLine(String line) {
   else if (line == "PING") {
     sendLine("PONG");
   }
+  else if (line == "WHOAMI") {
+    sendLine("ID:MOTORS");
+  }
   else {
     sendLine("ERR:unknown_cmd");
   }

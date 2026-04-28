@@ -22,18 +22,18 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
 
-    # Puertos USB de las ESP32 en este montaje:
-    #   /dev/ttyUSB3 -> ESP32 de motores (L298N + 2x 25GA370)
-    #   /dev/ttyUSB2 -> ESP32 del lift   (TB6612FNG + servo MG995)
-    # Si los numeros cambian al reiniciar, sobrescribir con:
-    #   ros2 launch diff_bot_3 robot_launch.py motors_port:=/dev/ttyUSBX lift_port:=/dev/ttyUSBY
+    # Por defecto, "auto": cada bridge escanea /dev/ttyUSB* y /dev/ttyACM*
+    # y se queda con la ESP32 que responde WHOAMI con su ID esperado
+    # (MOTORS o LIFT). Si por algun motivo la autodeteccion falla, se
+    # puede forzar un puerto especifico:
+    #   ros2 launch diff_bot_3 robot_launch.py motors_port:=/dev/ttyUSB3
     motors_port = DeclareLaunchArgument(
-        'motors_port', default_value='/dev/ttyUSB3',
-        description='Puerto serie de la ESP32 de motores')
+        'motors_port', default_value='auto',
+        description='Puerto serie de la ESP32 de motores ("auto" = autodetectar)')
 
     lift_port = DeclareLaunchArgument(
-        'lift_port', default_value='/dev/ttyUSB2',
-        description='Puerto serie de la ESP32 del montacargas')
+        'lift_port', default_value='auto',
+        description='Puerto serie de la ESP32 del montacargas ("auto" = autodetectar)')
 
     return LaunchDescription([
         motors_port,
@@ -59,6 +59,7 @@ def generate_launch_description():
              name='esp32_bridge_motors',
              parameters=[{
                  'port':         LaunchConfiguration('motors_port'),
+                 'expected_id':  'MOTORS',
                  'baud':         115200,
                  'cmd_topic':    '/motors_cmd',
                  'status_topic': '/motors_status',
@@ -69,6 +70,7 @@ def generate_launch_description():
              name='esp32_bridge_lift',
              parameters=[{
                  'port':         LaunchConfiguration('lift_port'),
+                 'expected_id':  'LIFT',
                  'baud':         115200,
                  'cmd_topic':    '/lift_cmd',
                  'status_topic': '/lift_status',
