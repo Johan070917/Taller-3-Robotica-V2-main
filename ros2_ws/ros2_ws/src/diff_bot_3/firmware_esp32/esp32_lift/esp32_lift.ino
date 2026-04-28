@@ -75,8 +75,10 @@
 #define PWM_RESOLUTION  8
 
 // ---- Velocidad del lift ----
-const int PWM_LIFT_UP   = 200;   // 0..255
-const int PWM_LIFT_DOWN = 180;
+// Subimos a 250/220 para asegurar torque suficiente.  Si el motor se
+// queja o la mecanica se fuerza, baja estos valores.
+const int PWM_LIFT_UP   = 250;   // 0..255  (subir contra gravedad)
+const int PWM_LIFT_DOWN = 220;   // 0..255  (bajar, ayuda la gravedad)
 const int PWM_HOMING    = 120;
 
 // ---- Servo (calibrar al instalar las palas) ----
@@ -112,14 +114,16 @@ void IRAM_ATTR ISR_EncoderLift() {
 // ============================================================
 void liftDrive(int dir, int pwm) {
   // dir: +1 sube, -1 baja, 0 freno
+  // Polaridad invertida respecto al cableado original: con esta logica
+  // LIFT_UP fisicamente sube y LIFT_DOWN fisicamente baja.
   digitalWrite(TB_STBY, HIGH);
   if (dir > 0) {
-    digitalWrite(TB_AIN1, HIGH);
-    digitalWrite(TB_AIN2, LOW);
-    ledcWrite(TB_PWMA, pwm);
-  } else if (dir < 0) {
     digitalWrite(TB_AIN1, LOW);
     digitalWrite(TB_AIN2, HIGH);
+    ledcWrite(TB_PWMA, pwm);
+  } else if (dir < 0) {
+    digitalWrite(TB_AIN1, HIGH);
+    digitalWrite(TB_AIN2, LOW);
     ledcWrite(TB_PWMA, pwm);
   } else {
     // Freno corto
