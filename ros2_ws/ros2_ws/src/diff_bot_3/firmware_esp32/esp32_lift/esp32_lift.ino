@@ -83,8 +83,8 @@ const int PWM_HOMING    = 120;
 const int SERVO_VERTICAL    = 30;    // pala perpendicular al suelo (recogida)
 const int SERVO_HORIZONTAL  = 120;   // pala paralela al suelo (extendida)
 
-// ---- Watchdog para movimientos ----
-const unsigned long T_TIMEOUT_MS = 8000;
+// ---- Duracion fija del movimiento del lift (modo sin encoder) ----
+const unsigned long LIFT_DURATION_MS = 2000;
 
 // ============================================================
 //  Estado
@@ -151,12 +151,9 @@ long parseLongAfter(const String& line, int from_idx) {
 }
 
 void cmdLiftMove(int dir, long ticks) {
-  if (ticks <= 0) { sendLine("DONE"); return; }
-  noInterrupts();
-  long base = enc_count;
-  interrupts();
-  // Guardamos como "objetivo absoluto" para no acumular error
-  target_ticks = base + (dir > 0 ? ticks : -ticks);
+  // Modo sin encoder: el parametro <ticks> se ignora.
+  // El motor se mueve durante LIFT_DURATION_MS y se detiene solo.
+  (void)ticks;
   lift_dir = dir;
   lift_running = true;
   t_op_start = millis();
@@ -165,12 +162,7 @@ void cmdLiftMove(int dir, long ticks) {
 }
 
 void cmdLiftHome() {
-  // Baja hasta que enc_count vuelva a <=0
-  noInterrupts();
-  long pos = enc_count;
-  interrupts();
-  if (pos <= 0) { sendLine("DONE"); return; }
-  target_ticks = 0;
+  // Sin encoder no hay referencia absoluta: tratamos HOME como "baja 2s".
   lift_dir = -1;
   lift_running = true;
   t_op_start = millis();
@@ -267,10 +259,11 @@ void setup() {
   ledcAttach(TB_PWMA, PWM_FREQ, PWM_RESOLUTION);
   ledcWrite(TB_PWMA, 0);
 
-  // ---- Encoder ----
-  pinMode(ENC_LIFT_A, INPUT_PULLUP);
-  pinMode(ENC_LIFT_B, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(ENC_LIFT_A), ISR_EncoderLift, RISING);
+  // ---- Encoder (DESACTIVADO: control por tiempo, no por ticks) ----
+  // Se deja el codigo de la ISR arriba por si en el futuro se reactiva.
+  // pinMode(ENC_LIFT_A, INPUT_PULLUP);
+  // pinMode(ENC_LIFT_B, INPUT_PULLUP);
+  // attachInterrupt(digitalPinToInterrupt(ENC_LIFT_A), ISR_EncoderLift, RISING);
 
   Serial.begin(115200);
   delay(200);
@@ -294,23 +287,11 @@ void loop() {
     }
   }
 
-  // ---- Control del lift ----
+  // ---- Control del lift (sin encoder, por tiempo) ----
   if (lift_running) {
-    noInterrupts();
-    long pos = enc_count;
-    interrupts();
-
-    bool reached = false;
-    if (lift_dir > 0)      reached = (pos >= target_ticks);
-    else if (lift_dir < 0) reached = (pos <= target_ticks);
-
-    if (reached) {
+    if (millis() - t_op_start >= LIFT_DURATION_MS) {
       liftStop();
       sendLine("DONE");
-    }
-    else if (millis() - t_op_start > T_TIMEOUT_MS) {
-      liftStop();
-      sendLine("ERR:lift_timeout");
     }
   }
 }
