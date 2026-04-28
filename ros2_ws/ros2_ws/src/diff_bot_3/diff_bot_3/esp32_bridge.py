@@ -21,6 +21,17 @@ El protocolo es texto plano por lineas (terminadas en '\n').
 Cada firmware ESP32 debe responder a WHOAMI:
   motors firmware -> "ID:MOTORS"
   lift firmware   -> "ID:LIFT"
+
+Robustez de la autodeteccion:
+  - Si un puerto esta ocupado momentaneamente (por ejemplo otro bridge
+    probandolo en paralelo, o ModemManager), reintenta con backoff hasta
+    AUTODETECT_BUDGET_S segundos en total.
+  - Si la deteccion termina y no encuentra match, repite el barrido
+    completo hasta agotar el presupuesto. Esto cubre el caso en el que
+    dos bridges arrancan simultaneamente y se "tropiezan" entre si.
+  - Una vez identificado el puerto correcto, se MANTIENE abierto el
+    objeto Serial (no se cierra y reabre), para evitar que otro bridge
+    pueda quitarselo y para no causar otro reset de 2s del CDC.
 """
 
 import glob
@@ -37,27 +48,49 @@ except ImportError:
     serial = None
 
 
-def _probe_port(port: str, baud: int, expected_id: str, logger=None) -> bool:
-    """Abre el puerto, manda WHOAMI y revisa si responde ID:<expected_id>.
+# ---------------- Config de la autodeteccion ----------------
+AUTODETECT_BUDGET_S = 60.0   # tiempo total maximo escaneando
+PROBE_OPEN_TIMEOUT  = 0.3    # timeout de lectura al probar
+PROBE_CDC_RESET_S   = 2.0    # tiempo que tarda la ESP32 en quedar lista
+PROBE_REPLY_WAIT_S  = 1.5    # tiempo maximo esperando respuesta a WHOAMI
+RETRY_BUSY_DELAY_S  = 0.7    # cuanto esperar antes de reintentar un puerto ocupado
 
-    Devuelve True si coincide, False en cualquier otro caso. Cierra
-    siempre el puerto antes de volver.
+
+def _is_busy_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return ('busy' in msg) or ('errno 16' in msg) or ('resource' in msg)
+
+
+def _probe_port(port: str, baud: int, expected_id: str, logger=None):
+    """Intenta abrir el puerto y verificar que responde ID:<expected_id>.
+
+    Devuelve:
+      * objeto serial.Serial abierto -> match correcto, dejar este Serial
+        en uso (NO cerrarlo)
+      * False -> abrio bien pero el ID no coincide (o no respondio nada)
+      * None  -> no se pudo abrir (busy / no existe / permiso)
+
+    Importante: si retorna un Serial valido, el llamante debe usarlo
+    sin reabrirlo (asi evitamos otro reset CDC y race conditions).
     """
     target = f"ID:{expected_id}".strip().upper()
     s = None
     try:
-        s = serial.Serial(port, baud, timeout=0.3)
-        # Despues de abrir CDC, la ESP32 se resetea y tarda ~1.5s en
-        # quedar lista para responder. Damos margen.
-        time.sleep(2.0)
-        # Drenar el buffer (puede traer "READY" residual)
+        s = serial.Serial(port, baud, timeout=PROBE_OPEN_TIMEOUT)
+    except Exception as e:
+        if logger is not None and not _is_busy_error(e):
+            logger.warn(f"probe {port}: {e}")
+        return None
+
+    try:
+        # Espera el reset CDC + arranque del firmware
+        time.sleep(PROBE_CDC_RESET_S)
         s.reset_input_buffer()
         s.write(b"WHOAMI\n")
         s.flush()
 
-        # Leer hasta 1.5s buscando una linea ID:...
         t0 = time.time()
-        while time.time() - t0 < 1.5:
+        while time.time() - t0 < PROBE_REPLY_WAIT_S:
             raw = s.readline()
             if not raw:
                 continue
@@ -65,33 +98,63 @@ def _probe_port(port: str, baud: int, expected_id: str, logger=None) -> bool:
             if not line:
                 continue
             if line == target:
-                return True
-            # Ignoramos READY, PONG, ERR:..., etc. y seguimos esperando
+                # MATCH: devolvemos el Serial abierto (no cerrar)
+                return s
+            # cualquier otra linea (READY, PONG, ERR, ID:<otro>) la ignoramos
+        # No respondio o respondio otra cosa -> no match
+        try:
+            s.close()
+        except Exception:
+            pass
         return False
     except Exception as e:
         if logger is not None:
             logger.warn(f"probe {port}: {e}")
-        return False
-    finally:
         try:
-            if s is not None:
-                s.close()
+            s.close()
         except Exception:
             pass
+        return False
 
 
-def _autodetect_port(expected_id: str, baud: int, logger=None) -> str:
-    """Escanea /dev/ttyUSB* y /dev/ttyACM* y devuelve el primero que
-    responda WHOAMI con ID:<expected_id>. Devuelve cadena vacia si no
-    encuentra ninguno.
+def _autodetect_port(expected_id: str, baud: int, logger=None):
+    """Escanea puertos hasta encontrar la ESP32 cuyo WHOAMI coincida.
+
+    Devuelve (path, serial.Serial) o ('', None) si se acaba el tiempo.
+    El Serial devuelto YA esta abierto y listo para usar.
+
+    El barrido es robusto a ports busy: si un puerto esta ocupado, se
+    reintenta mas tarde dentro del presupuesto de tiempo.
     """
-    candidates = sorted(glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*'))
-    if logger is not None:
-        logger.info(f"Autodetect ID:{expected_id} entre {candidates}")
-    for port in candidates:
-        if _probe_port(port, baud, expected_id, logger=logger):
-            return port
-    return ''
+    deadline = time.time() + AUTODETECT_BUDGET_S
+    busy_first = True
+
+    while time.time() < deadline:
+        candidates = sorted(glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*'))
+        if logger is not None and busy_first:
+            logger.info(f"Autodetect ID:{expected_id} entre {candidates}")
+            busy_first = False
+
+        any_busy = False
+        for port in candidates:
+            result = _probe_port(port, baud, expected_id, logger=logger)
+            if isinstance(result, serial.Serial):
+                if logger is not None:
+                    logger.info(f"Match {port} -> ID:{expected_id}")
+                return port, result
+            if result is None:
+                # busy o error de apertura -> marcamos para reintento
+                any_busy = True
+            # result is False -> ID no coincide -> seguir con el siguiente
+
+        if any_busy:
+            time.sleep(RETRY_BUSY_DELAY_S)
+        else:
+            # ningun puerto estaba busy y ninguno coincidio -> esperar
+            # un poco por si la ESP32 se acaba de enchufar
+            time.sleep(1.0)
+
+    return '', None
 
 
 class Esp32Bridge(Node):
@@ -115,11 +178,20 @@ class Esp32Bridge(Node):
         if serial is None:
             self.get_logger().error("pyserial no esta instalado.")
         else:
-            port = self._resolve_port(port_param, expected_id, baud)
-            if port:
+            port, ser = self._resolve_port(port_param, expected_id, baud)
+            if port and ser is not None:
+                # Caso autodetect: ya tenemos el Serial abierto y verificado.
+                ser.timeout = 0.1
+                self.ser = ser
+                self.get_logger().info(
+                    f"[{self.get_name()}] {port}@{baud}  "
+                    f"cmd={cmd_topic}  status={status_topic}  "
+                    f"id={expected_id or '(no check)'}")
+            elif port:
+                # Caso puerto explicito: abrimos sin verificacion de ID.
                 try:
                     self.ser = serial.Serial(port, baud, timeout=0.1)
-                    time.sleep(2.0)   # reset de la ESP32 al abrir CDC
+                    time.sleep(PROBE_CDC_RESET_S)   # reset CDC
                     self.get_logger().info(
                         f"[{self.get_name()}] {port}@{baud}  "
                         f"cmd={cmd_topic}  status={status_topic}  "
@@ -129,9 +201,11 @@ class Esp32Bridge(Node):
                     self.ser = None
             else:
                 self.get_logger().error(
-                    f"No se encontro ninguna ESP32 con ID:{expected_id}. "
-                    f"Verifica que la ESP32 este conectada y con firmware "
-                    f"que soporte WHOAMI.")
+                    f"No se encontro ninguna ESP32 con ID:{expected_id} "
+                    f"despues de {AUTODETECT_BUDGET_S:.0f}s. "
+                    f"Verifica que la ESP32 este conectada, alimentada y "
+                    f"con firmware que soporte WHOAMI. "
+                    f"Sospechosos comunes: ModemManager retiene el puerto.")
 
         self.pub_status = self.create_publisher(String, status_topic, 50)
         self.create_subscription(String, cmd_topic, self._on_cmd, 50)
@@ -140,20 +214,22 @@ class Esp32Bridge(Node):
         self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
         self._rx_thread.start()
 
-    def _resolve_port(self, port_param: str, expected_id: str, baud: int) -> str:
-        """Devuelve la ruta serie a abrir.
+    def _resolve_port(self, port_param: str, expected_id: str, baud: int):
+        """Devuelve (port_path, open_serial_or_None).
 
-        - Si port_param es "auto" o vacio -> autodetecta usando expected_id.
-        - Si es una ruta explicita -> la usa tal cual (sin verificar ID).
+        - port_param "auto"/vacio -> autodetecta usando expected_id;
+          devuelve el Serial ya abierto.
+        - port_param explicito -> devuelve (path, None) y el llamante
+          abrira el puerto.
         """
         p = (port_param or '').strip().lower()
         if p in ('', 'auto'):
             if not expected_id:
                 self.get_logger().error(
                     "port=auto requiere expected_id (MOTORS o LIFT).")
-                return ''
+                return '', None
             return _autodetect_port(expected_id, baud, logger=self.get_logger())
-        return port_param
+        return port_param, None
 
     def _on_cmd(self, msg: String):
         if self.ser is None:

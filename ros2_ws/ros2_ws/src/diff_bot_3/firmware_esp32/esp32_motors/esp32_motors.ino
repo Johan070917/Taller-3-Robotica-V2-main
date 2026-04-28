@@ -203,8 +203,12 @@ void setup() {
   ledcAttach(MOTOR_A_ENA, PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(MOTOR_B_ENB, PWM_FREQ, PWM_RESOLUTION);
 
-  pinMode(ENC_A_S1, INPUT_PULLUP);
-  pinMode(ENC_A_S2, INPUT_PULLUP);
+  // GPIO 34 y 35 son input-only y NO tienen pull-up interno en el ESP32.
+  // Si se usan, deben llevar un resistor externo de 10 kohm a 3.3V.
+  // Por eso aqui usamos INPUT (sin pull-up) — el pull-up es externo.
+  pinMode(ENC_A_S1, INPUT);
+  pinMode(ENC_A_S2, INPUT);
+  // GPIO 32 y 33 si soportan pull-up interno.
   pinMode(ENC_B_S1, INPUT_PULLUP);
   pinMode(ENC_B_S2, INPUT_PULLUP);
 
