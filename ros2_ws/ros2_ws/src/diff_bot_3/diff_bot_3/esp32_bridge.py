@@ -2,8 +2,8 @@
 esp32_bridge.py  -  Puente serie generico RPi5 (maestro) <-> ESP32 (esclavo).
 
 Se lanza una instancia por cada ESP32:
-  * esp32_bridge_motors  -> /dev/ttyUSB0  -> /motors_cmd, /motors_status
-  * esp32_bridge_lift    -> /dev/ttyUSB1  -> /lift_cmd,   /lift_status
+  * esp32_bridge_motors  -> /dev/ttyUSB3  -> /motors_cmd, /motors_status
+  * esp32_bridge_lift    -> /dev/ttyUSB2  -> /lift_cmd,   /lift_status
 
 Parametros:
   port          puerto serie (string)

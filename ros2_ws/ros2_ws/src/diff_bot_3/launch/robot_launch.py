@@ -22,12 +22,17 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
 
+    # Puertos USB de las ESP32 en este montaje:
+    #   /dev/ttyUSB3 -> ESP32 de motores (L298N + 2x 25GA370)
+    #   /dev/ttyUSB2 -> ESP32 del lift   (TB6612FNG + servo MG995)
+    # Si los numeros cambian al reiniciar, sobrescribir con:
+    #   ros2 launch diff_bot_3 robot_launch.py motors_port:=/dev/ttyUSBX lift_port:=/dev/ttyUSBY
     motors_port = DeclareLaunchArgument(
-        'motors_port', default_value='/dev/ttyUSB0',
+        'motors_port', default_value='/dev/ttyUSB3',
         description='Puerto serie de la ESP32 de motores')
 
     lift_port = DeclareLaunchArgument(
-        'lift_port', default_value='/dev/ttyUSB1',
+        'lift_port', default_value='/dev/ttyUSB2',
         description='Puerto serie de la ESP32 del montacargas')
 
     return LaunchDescription([
