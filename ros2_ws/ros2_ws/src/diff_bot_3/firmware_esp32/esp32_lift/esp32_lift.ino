@@ -240,6 +240,14 @@ void handleLine(String line) {
 //  Setup
 // ============================================================
 void setup() {
+  // ---- Anclar el pin del servo a LOW lo ANTES posible ----
+  // Si la bateria del servo se enciende mientras GPIO 13 esta flotando,
+  // el MG995 ve pulsos aleatorios y se sacude descontroladamente.
+  // Forzando LOW, el servo no recibe pulsos validos y se queda quieto
+  // hasta que ESP32Servo tome el pin.
+  pinMode(PIN_SERVO, OUTPUT);
+  digitalWrite(PIN_SERVO, LOW);
+
   // ---- Reservar timers para ESP32Servo ANTES del attach ----
   // Sin esto, attach() falla silenciosamente y la senal PWM no se genera
   // (porque ledcAttach del TB6612FNG ya consume timer 0).
