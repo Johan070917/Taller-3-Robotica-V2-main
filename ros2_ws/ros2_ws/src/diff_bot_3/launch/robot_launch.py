@@ -86,8 +86,8 @@ def generate_launch_description():
                  'require_enable_button': False,
                  'axis_linear.x':   1,
                  'axis_angular.yaw': 0,
-                 'scale_linear.x':   0.25,
-                 'scale_angular.yaw': 1.20,
+                 'scale_linear.x':   0.15,
+                 'scale_angular.yaw': 1.00,
              }],
              remappings=[('/cmd_vel', '/cmd_vel_teleop')]),
     ])

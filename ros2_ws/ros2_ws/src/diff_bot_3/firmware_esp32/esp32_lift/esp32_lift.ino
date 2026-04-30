@@ -82,8 +82,8 @@ const int PWM_LIFT_DOWN = 220;   // 0..255  (bajar, ayuda la gravedad)
 const int PWM_HOMING    = 120;
 
 // ---- Servo (calibrar al instalar las palas) ----
-const int SERVO_VERTICAL    = 30;    // pala perpendicular al suelo (recogida)
-const int SERVO_HORIZONTAL  = 120;   // pala paralela al suelo (extendida)
+const int SERVO_VERTICAL    = 80;    // pala perpendicular al suelo (recogida)
+const int SERVO_HORIZONTAL  = 175;   // pala paralela al suelo (extendida)
 
 // ---- Duracion fija del movimiento del lift (modo sin encoder) ----
 const unsigned long LIFT_DURATION_MS = 2000;

@@ -44,6 +44,14 @@ I_MAX = 0.80
 # Periodo del lazo de control en RPi
 DT_CONTROL = 0.02            # 50 Hz
 
+# Rampa de aceleracion: limite cuanto puede CAMBIAR la velocidad de
+# referencia por segundo (slew rate). Sin esto, soltar el stick a fondo
+# manda al PID a saltar de 0 a v_max instantaneamente y el robot
+# tiende a caerse hacia atras por inercia (centro de masa alto).
+# Valores tipicos: 0.3-0.6 m/s^2 para arranques suaves.
+ACC_LIN_MAX_MPS2 = 0.40   # m/s^2
+ACC_ANG_MAX_RPS2 = 2.50   # rad/s^2
+
 
 # ----------------------------------- UTIL -----------------------------------
 def quat_from_yaw(yaw):
@@ -87,9 +95,13 @@ class RobotCore(Node):
         self.v_real_r = 0.0
         self.last_enc_time = None
 
-        # Referencia
+        # Referencia (la pedida por el usuario / forklift)
         self.v_ref = 0.0
         self.w_ref = 0.0
+        # Referencia "filtrada" por la rampa de aceleracion (la que
+        # realmente alimenta el PID).
+        self.v_cmd = 0.0
+        self.w_cmd = 0.0
         self._last_cmd_time = self.get_clock().now()
 
         # PID
@@ -181,15 +193,27 @@ class RobotCore(Node):
         if abs(self.v_ref) < 0.02 and abs(self.w_ref) < 0.05:
             self.pid_l.reset()
             self.pid_r.reset()
+            # Tambien resetear las referencias filtradas para que al
+            # arrancar de nuevo, la rampa empiece desde 0.
+            self.v_cmd = 0.0
+            self.w_cmd = 0.0
             self.pub_motors_cmd.publish(String(data="PWM 0 0"))
             wm = Float32MultiArray()
             wm.data = [self.v_real_l, self.v_real_r, 0.0, 0.0]
             self.pub_wheels.publish(wm)
             return
 
-        # Cinematica inversa
-        v_ref_l = self.v_ref + (self.w_ref * L_BASE / 2.0)
-        v_ref_r = self.v_ref - (self.w_ref * L_BASE / 2.0)
+        # Rampa de aceleracion: aproxima v_cmd a v_ref con un cambio
+        # maximo de ACC_LIN_MAX_MPS2 * DT por ciclo. Esto evita que la
+        # velocidad pedida salte de 0 a max al apretar el stick.
+        dv_max = ACC_LIN_MAX_MPS2 * DT_CONTROL
+        dw_max = ACC_ANG_MAX_RPS2 * DT_CONTROL
+        self.v_cmd += max(-dv_max, min(dv_max, self.v_ref - self.v_cmd))
+        self.w_cmd += max(-dw_max, min(dw_max, self.w_ref - self.w_cmd))
+
+        # Cinematica inversa (usando la referencia filtrada por la rampa)
+        v_ref_l = self.v_cmd + (self.w_cmd * L_BASE / 2.0)
+        v_ref_r = self.v_cmd - (self.w_cmd * L_BASE / 2.0)
 
         # Feed-forward + PID
         ff_l = v_ref_l / V_MAX_RUEDA
